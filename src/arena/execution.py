@@ -1,7 +1,5 @@
 from typing import TYPE_CHECKING, Optional, Tuple
 import asyncio
-import logging
-from urllib.parse import urlparse
 
 from arena.state import AgentState
 from arena.errors import AgentError
@@ -14,9 +12,6 @@ if TYPE_CHECKING:
 
 
 MAX_STEP_ERRORS = 3
-
-
-logger = logging.getLogger(__name__)
 
 
 class TaskExecution:
@@ -57,20 +52,15 @@ class TaskExecution:
         Returns:
             Tuple of (final_agent_state, experiment_result)
         """
-        logger.info("Running task '%s' on %s", self.task.goal, self.task.url)
+        print(f"Running task '{self.task.goal}' on {self.task.url}")
         # Navigate to URL and wait
         navigation_wait = getattr(self.browser, "wait_until", None) or "load"
         try:
             await self.browser.page.goto(self.task.url, wait_until=navigation_wait)
         except Exception as _:
-            logger.warning(
-                "Failed to navigate to URL %s (wait_until=%s); continuing",
-                self.task.url,
-                navigation_wait,
-            )
+            print(f"Failed to navigate to URL: {self.task.url}. Continuing regardless")
 
         await self.browser.page.wait_for_timeout(2000)
-        logger.debug("Post-navigation wait completed")
 
         # Initialize agent state
         state = AgentState(
@@ -79,10 +69,6 @@ class TaskExecution:
             task_execution_id=self.task_execution_id,
         )
 
-        initial_host = urlparse(self.task.url).netloc.lower()
-        state.initial_url = self.task.url
-        state.allowed_hosts = {initial_host} if initial_host else set()
-
         state.messages.append(
             {
                 "role": "user",
@@ -90,22 +76,17 @@ class TaskExecution:
                 "content": f"Your goal is {state.goal}",
             }
         )
-        logger.debug("Initial state prepared with goal '%s'", state.goal)
 
         # Run agent steps
         step = 0  # Initialize step variable
         for step in range(self.max_steps):
             state.step = step
-            logger.info("Starting step %d", step)
 
             # Take screenshot and store in state
             screenshot = await self.browser.screenshot()
             state.images.append(screenshot)
-            logger.debug("Screenshot captured and stored (total=%d)", len(state.images))
 
             # Execute agent step
-            previous_url = state.url
-
             try:
                 state = await asyncio.wait_for(
                     self.agent.step(self.browser, state),
@@ -113,53 +94,34 @@ class TaskExecution:
                 )
                 state.error = None  # clear previous error
                 state.error_count = 0  # reset error count on success
-                logger.info("Step %d completed successfully", step)
             except AgentError as e:
                 state.register_error(e)
                 if state.error_count >= MAX_STEP_ERRORS:
                     raise RuntimeError(
                         f"Step {step} failed {MAX_STEP_ERRORS} times"
                     )
-                logger.warning(
-                    "AgentError on step %d (%d/%d attempts): %s",
-                    step,
-                    state.error_count,
-                    MAX_STEP_ERRORS,
-                    e,
-                )
             except TimeoutError:
                 state.register_error(TimeoutError(f"Step {step} timed out"))
                 if state.error_count >= MAX_STEP_ERRORS:
                     raise RuntimeError(
                         f"Step {step} failed {MAX_STEP_ERRORS} times"
                     )
-                logger.warning(
-                    "Step %d timed out (%d/%d attempts)",
-                    step,
-                    state.error_count,
-                    MAX_STEP_ERRORS,
-                )
             except Exception as e:
                 if not self.ignore_errors:
                     raise
                 agent_error = AgentError(f"Unexpected error: {e}")
                 state.register_error(agent_error)
-                logger.exception("Unexpected error on step %d", step)
 
             if state.error_count >= MAX_STEP_ERRORS:
                 raise RuntimeError(f"Step {step} failed {MAX_STEP_ERRORS} times")
 
             state.url = self.browser.page.url
-            if state.url != previous_url:
-                logger.info("Step %d navigated to %s", step, state.url)
             await asyncio.sleep(0.5)
             if state.finished:
-                logger.info("Task signaled finished after step %d", step)
                 break
 
         # Evaluate task
-        logger.info("Evaluating task '%s'", self.task.goal)
+        print("Evaluating task")
         result = await self.task.evaluate(state)
-        logger.info("Evaluation result: %s", result)
 
         return state, result

@@ -1,0 +1,174 @@
+@startuml Execution Flow Sequence
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam sequenceMessageAlign center
+
+title Hierarchical Action Batching - Execution Flow
+
+actor User
+participant "AdaptiveAgent" as Agent
+participant "AgentBrowser" as Browser
+participant "QwenVisionModel" as Vision
+participant "GPT4Orchestrator" as Orchestrator
+participant "ActionBatchExecutor" as Executor
+participant "MetricsTracker" as Metrics
+database "AgentState" as State
+
+== Initialization ==
+User -> Agent: step(browser, state)
+activate Agent
+Agent -> Metrics: start()
+activate Metrics
+Metrics --> Agent: tracking started
+deactivate Metrics
+
+== Step 1: Screenshot Capture ==
+Agent -> Browser: screenshot()
+activate Browser
+Browser --> Agent: base64 screenshot
+deactivate Browser
+Agent -> Metrics: record_screenshot()
+
+== Step 2: Parallel Analysis ==
+note over Agent, Orchestrator
+    Both models run in parallel
+    using asyncio.gather()
+end note
+
+par Parallel Execution
+    Agent -> Vision: analyze_page(screenshot, history)
+    activate Vision
+    Agent -> Metrics: record_vision_call()
+    Vision -> Vision: Process screenshot\nIdentify elements
+    Vision --> Agent: PageAnalysis
+    deactivate Vision
+else
+    Agent -> Orchestrator: analyze_and_plan(goal, plan, analysis, ...)
+    activate Orchestrator
+    Agent -> Metrics: record_orchestrator_call()
+    Orchestrator -> Orchestrator: Analyze goal\nCreate/revise plan
+    Orchestrator --> Agent: ExecutionPlan
+    deactivate Orchestrator
+end
+
+Agent -> Agent: Store PageAnalysis\nStore ExecutionPlan
+
+== Step 3: Update State ==
+Agent -> State: Add page analysis to messages
+Agent -> State: Add execution plan to messages
+
+== Step 4: Action Batch Execution ==
+Agent -> Executor: create(browser)
+activate Executor
+
+Agent -> Executor: create_batch(plan)
+Executor -> Executor: Extract consecutive\nsame-page actions
+Executor --> Agent: List[Action]
+
+Agent -> Executor: execute_batch(actions, page_analysis)
+Executor -> Executor: Validate actions
+
+loop For each action in batch
+    Executor -> Executor: _execute_action(action, element_map)
+    alt Action succeeds
+        Executor -> Browser: Execute action\n(click/type/select/etc)
+        activate Browser
+        Browser --> Executor: success
+        deactivate Browser
+        Executor -> Executor: actions_completed++
+        
+        alt Action is navigation
+            Executor -> Executor: navigation_occurred = true
+            note right: Stop batch after navigation
+            Executor -> Executor: break loop
+        end
+    else Action fails
+        Executor -> Executor: Create ExecutionError
+        Executor -> Executor: Classify error type
+        note right: Stop batch on first error
+        Executor -> Executor: break loop
+    end
+end
+
+Executor --> Agent: ExecutionResult
+deactivate Executor
+
+Agent -> Metrics: record_actions(total, successful)
+
+== Step 5: Handle Result ==
+alt Batch succeeded
+    Agent -> Agent: Remove completed actions from plan
+    Agent -> Agent: consecutive_revisions = 0
+    Agent -> State: Add success message
+    
+    alt Navigation occurred
+        Agent -> Browser: screenshot()
+        activate Browser
+        Browser --> Agent: new screenshot
+        deactivate Browser
+        Agent -> Metrics: record_screenshot()
+    end
+    
+else Batch failed
+    Agent -> Browser: screenshot()
+    activate Browser
+    Browser --> Agent: error screenshot
+    deactivate Browser
+    Agent -> Metrics: record_screenshot()
+    
+    alt Partial success
+        Agent -> Agent: Remove completed actions
+        Agent -> State: Add partial success message
+    end
+    
+    Agent -> State: Add error information
+    
+    alt Revision limit reached
+        Agent -> State: Mark task as failed
+        Agent -> State: finished = true
+    else Can retry
+        Agent -> Agent: consecutive_revisions++
+        
+        == Error Recovery: Plan Revision ==
+        Agent -> Vision: analyze_page(screenshot, history)
+        activate Vision
+        Agent -> Metrics: record_vision_call()
+        Vision --> Agent: Updated PageAnalysis
+        deactivate Vision
+        
+        Agent -> Orchestrator: analyze_and_plan(goal, plan, analysis, error_info, ...)
+        activate Orchestrator
+        Agent -> Metrics: record_orchestrator_call()
+        Agent -> Metrics: record_plan_revision()
+        Orchestrator -> Orchestrator: Analyze error\nRevise plan
+        Orchestrator --> Agent: Revised ExecutionPlan
+        deactivate Orchestrator
+        
+        Agent -> Agent: Update current_plan
+        Agent -> State: Add revision message
+    end
+end
+
+== Step 6: Return Updated State ==
+Agent -> Metrics: stop()
+activate Metrics
+Metrics --> Agent: tracking stopped
+deactivate Metrics
+
+Agent --> User: Updated AgentState
+deactivate Agent
+
+== Optional: Get Metrics ==
+User -> Agent: get_metrics_summary()
+activate Agent
+Agent -> Metrics: get_summary()
+activate Metrics
+Metrics -> Metrics: Calculate statistics
+Metrics --> Agent: MetricsSummary
+deactivate Metrics
+Agent --> User: MetricsSummary
+deactivate Agent
+
+@enduml

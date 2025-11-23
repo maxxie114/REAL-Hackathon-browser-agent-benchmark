@@ -1,0 +1,325 @@
+@startuml Hierarchical Action Batching Architecture
+
+!define COMPONENT_BG_COLOR #E3F2FD
+!define MODEL_BG_COLOR #FFF3E0
+!define EXECUTOR_BG_COLOR #E8F5E9
+!define METRICS_BG_COLOR #F3E5F5
+
+skinparam componentStyle rectangle
+skinparam backgroundColor white
+skinparam shadowing false
+
+title Hierarchical Action Batching System - Architecture
+
+' ============================================================================
+' Core Agent Component
+' ============================================================================
+
+package "Agent Layer" <<Rectangle>> {
+    component "AdaptiveAgent" as Agent COMPONENT_BG_COLOR {
+        + step(browser, state): AgentState
+        + get_metrics_summary(): MetricsSummary
+        - _async_step(browser, state): AgentState
+        - _capture_screenshot_with_retry(browser): str
+        - _handle_tool_call(tool_call, browser, state): str
+        - _handle_info_seeking_query(query, screenshot, state): str
+        - _route_query(response, browser, state, screenshot): tuple
+        - _handle_location_failure(failure, browser, state, screenshot): None
+        --
+        - vision_model: QwenVisionModel
+        - orchestrator_model: GPT4Orchestrator
+        - metrics_tracker: MetricsTracker
+        - current_plan: ExecutionPlan
+        - current_page_analysis: PageAnalysis
+        - consecutive_revisions: int
+        - max_consecutive_revisions: int
+    }
+}
+
+' ============================================================================
+' Vision Model Components
+' ============================================================================
+
+package "Vision Layer" <<Rectangle>> {
+    component "QwenVisionModel" as VisionModel MODEL_BG_COLOR {
+        + analyze_page(screenshot, history): PageAnalysis
+        + locate_element(screenshot, description, analysis): ElementLocation | ElementLocationFailure
+        --
+        - model: str
+        - client: AsyncOpenAI
+        - opik_client: Opik
+    }
+}
+
+' ============================================================================
+' Orchestrator Components
+' ============================================================================
+
+package "Orchestrator Layer" <<Rectangle>> {
+    component "GPT4Orchestrator" as Orchestrator MODEL_BG_COLOR {
+        + analyze_and_plan(goal, plan, analysis, error, failure, is_turn_1, url): ExecutionPlan
+        + parse_output(response): ToolCall | InfoSeekingQuery
+        - _build_planning_prompt(...): str
+        - _validate_turn_1_plan(plan): ExecutionPlan
+        --
+        - model: str
+        - client: AsyncOpenAI
+        - opik_client: Opik
+    }
+}
+
+' ============================================================================
+' Execution Components
+' ============================================================================
+
+package "Execution Layer" <<Rectangle>> {
+    component "ActionBatchExecutor" as BatchExecutor EXECUTOR_BG_COLOR {
+        + create_batch(plan): List[Action]
+        + execute_batch(actions, analysis): ExecutionResult
+        + select_action_type(element): str
+        - _execute_action(action, element_map): None
+        - _execute_click(page, element, params): None
+        - _execute_type(page, element, params): None
+        - _execute_select(page, element, params): None
+        - _execute_date_input(page, element, params): None
+        - _execute_scroll(page, params): None
+        - _execute_wait(page, params): None
+        - _execute_goto(page, params): None
+        - _classify_error(error): str
+        --
+        - browser: AgentBrowser
+    }
+}
+
+' ============================================================================
+' Metrics Components
+' ============================================================================
+
+package "Metrics Layer" <<Rectangle>> {
+    component "MetricsTracker" as Metrics METRICS_BG_COLOR {
+        + start(): None
+        + stop(): None
+        + record_screenshot(): None
+        + record_vision_call(): None
+        + record_orchestrator_call(): None
+        + record_plan_revision(): None
+        + record_actions(total, successful): None
+        + get_summary(): MetricsSummary
+        --
+        - screenshot_count: int
+        - vision_calls: int
+        - orchestrator_calls: int
+        - plan_revisions: int
+        - start_time: float
+        - end_time: float
+        - total_actions: int
+        - successful_actions: int
+    }
+}
+
+' ============================================================================
+' Data Models
+' ============================================================================
+
+package "Data Models" <<Rectangle>> {
+    
+    class "PageElement" as PageElement {
+        + element_id: str
+        + element_type: str
+        + label: str
+        + coordinates: Tuple[int, int]
+        + field_type: Optional[str]
+        + attributes: Dict[str, str]
+    }
+    
+    class "PageAnalysis" as PageAnalysis {
+        + elements: List[PageElement]
+        + page_type: str
+        + content_summary: str
+        + timestamp: float
+    }
+    
+    class "Action" as Action {
+        + action_type: str
+        + target_element_id: str
+        + parameters: Dict[str, Any]
+        + is_navigation: bool
+        + description: str
+    }
+    
+    class "ExecutionPlan" as ExecutionPlan {
+        + actions: List[Action]
+        + reasoning: str
+        + created_at: float
+        + revision_count: int
+    }
+    
+    class "ExecutionError" as ExecutionError {
+        + action: Action
+        + error_type: str
+        + error_message: str
+        + screenshot_path: Optional[str]
+    }
+    
+    class "ExecutionResult" as ExecutionResult {
+        + success: bool
+        + actions_completed: int
+        + error: Optional[ExecutionError]
+        + navigation_occurred: bool
+    }
+    
+    class "ToolCall" as ToolCall {
+        + tool_name: str
+        + action_type: str
+        + parameters: Dict[str, Any]
+    }
+    
+    class "InfoSeekingQuery" as InfoSeekingQuery {
+        + element_description: str
+        + context: str
+    }
+    
+    class "ElementLocation" as ElementLocation {
+        + element_id: str
+        + coordinates: Tuple[int, int]
+        + element_type: str
+        + confidence: float
+    }
+    
+    class "ElementLocationFailure" as ElementLocationFailure {
+        + element_description: str
+        + reason: str
+        + available_elements: List[str]
+    }
+    
+    class "MetricsSummary" as MetricsSummary {
+        + screenshot_count: int
+        + vision_calls: int
+        + orchestrator_calls: int
+        + plan_revisions: int
+        + total_actions: int
+        + successful_actions: int
+        + execution_time_seconds: float
+        + actions_per_screenshot: float
+    }
+}
+
+' ============================================================================
+' External Dependencies
+' ============================================================================
+
+package "External Systems" <<Rectangle>> {
+    component "AgentBrowser" as Browser {
+        + screenshot(): str
+        + page: Page
+    }
+    
+    component "AgentState" as State {
+        + goal: str
+        + url: str
+        + step: int
+        + messages: List[Dict]
+        + finished: bool
+    }
+}
+
+' ============================================================================
+' Relationships - Agent to Components
+' ============================================================================
+
+Agent --> VisionModel : uses
+Agent --> Orchestrator : uses
+Agent --> BatchExecutor : creates
+Agent --> Metrics : uses
+Agent --> Browser : interacts with
+Agent --> State : updates
+
+' ============================================================================
+' Relationships - Data Flow
+' ============================================================================
+
+VisionModel ..> PageAnalysis : produces
+VisionModel ..> ElementLocation : produces
+VisionModel ..> ElementLocationFailure : produces
+
+Orchestrator ..> ExecutionPlan : produces
+Orchestrator ..> ToolCall : produces
+Orchestrator ..> InfoSeekingQuery : produces
+
+BatchExecutor ..> ExecutionResult : produces
+BatchExecutor ..> ExecutionError : produces
+
+Metrics ..> MetricsSummary : produces
+
+' ============================================================================
+' Relationships - Data Model Dependencies
+' ============================================================================
+
+PageAnalysis *-- PageElement : contains
+ExecutionPlan *-- Action : contains
+ExecutionResult *-- ExecutionError : contains
+ExecutionError *-- Action : references
+
+' ============================================================================
+' Relationships - Component Interactions
+' ============================================================================
+
+Agent --> PageAnalysis : stores current
+Agent --> ExecutionPlan : stores current
+BatchExecutor --> PageAnalysis : reads from
+BatchExecutor --> Action : executes
+Orchestrator --> PageAnalysis : analyzes
+Orchestrator --> ExecutionPlan : creates/revises
+Orchestrator --> ExecutionError : handles
+Orchestrator --> ElementLocationFailure : handles
+
+' ============================================================================
+' Notes
+' ============================================================================
+
+note right of Agent
+    **Main Orchestration Flow:**
+    1. Capture screenshot
+    2. Parallel analysis (Vision + Orchestrator)
+    3. Route queries (ToolCall vs InfoSeekingQuery)
+    4. Execute action batches
+    5. Handle errors with plan revision
+    6. Track metrics throughout
+end note
+
+note right of VisionModel
+    **Vision Model Responsibilities:**
+    - Analyze page screenshots
+    - Identify interactive elements
+    - Locate specific elements on request
+    - Report failures when elements not found
+end note
+
+note right of Orchestrator
+    **Orchestrator Responsibilities:**
+    - Analyze task goals
+    - Create execution plans
+    - Revise plans on errors/failures
+    - Validate turn 1 constraints
+    - Make strategic decisions
+end note
+
+note right of BatchExecutor
+    **Batch Executor Responsibilities:**
+    - Extract same-page action batches
+    - Execute actions sequentially
+    - Stop on first error
+    - Validate action-element compatibility
+    - Classify errors for recovery
+end note
+
+note right of Metrics
+    **Metrics Tracking:**
+    - Screenshot captures
+    - Model invocations
+    - Plan revisions
+    - Action execution stats
+    - Timing information
+end note
+
+@enduml

@@ -1,8 +1,6 @@
 import asyncio
-import logging
 import traceback
 import glob
-import os
 from pathlib import Path
 from typing import List, Any, Union, Optional
 import os.path as osp
@@ -10,10 +8,6 @@ import os.path as osp
 from arena.browser import AgentBrowser
 from arena.task import Task
 from arena.execution import TaskExecution
-from arena.logging_config import configure_logging
-
-
-logger = logging.getLogger(__name__)
 
 
 class RunHarness:
@@ -32,8 +26,6 @@ class RunHarness:
         wait_until: str = "load",
         timeout: int = 30000,
     ):
-        configure_logging(level=os.getenv("LOG_LEVEL", "DEBUG"))
-        logger.debug("RunHarness logging configured (effective level=%s)", logging.getLevelName(logging.getLogger().getEffectiveLevel()))
         self.agent = agent
         self.ignore_errors = ignore_errors
 
@@ -42,9 +34,9 @@ class RunHarness:
         parsed_tasks = self._parse_tasks(tasks)
 
         # Print all detected tasks
-        logger.info("Detected %d tasks", len(parsed_tasks))
+        print(f"Detected {len(parsed_tasks)} tasks:")
         for i, task_spec in enumerate(parsed_tasks):
-            logger.debug("Task %d spec: %s", i, task_spec)
+            print(f"  Task {i}: {task_spec}")
 
         self.parallel = parallel
         self.sample_count = sample_count
@@ -91,21 +83,11 @@ class RunHarness:
                             f"No files found matching glob pattern: {task}"
                         )
                     expanded_tasks.extend(sorted(glob_matches))
-                    logger.debug(
-                        "Expanded glob pattern '%s' to %d task(s)",
-                        task,
-                        len(glob_matches),
-                    )
                 else:
                     # Tree-search match for task specification
                     matches = self._find_task_matches(task)
                     if matches:
                         expanded_tasks.extend(matches)
-                        logger.debug(
-                            "Matched task spec '%s' to %d task(s)",
-                            task,
-                            len(matches),
-                        )
                     else:
                         raise ValueError(f"No tasks found matching: {task}")
 
@@ -152,22 +134,9 @@ class RunHarness:
             # Create browser with kwargs
             browser = AgentBrowser(**self.browser_kwargs)
             await browser.start()
-            logger.debug(
-                "Browser started for task %d sample %d with headless=%s",
-                task_idx,
-                sample_idx,
-                self.browser_kwargs.get("headless"),
-            )
 
             # Create Task object from task specification
             task = await Task.from_spec(task_spec, browser)
-            logger.info(
-                "Executing task %d sample %d: %s -> %s",
-                task_idx,
-                sample_idx,
-                task.goal,
-                task.url,
-            )
 
             # Create TaskExecution
             task_execution = TaskExecution(
@@ -190,50 +159,36 @@ class RunHarness:
                 self.successful_count += 1
             else:
                 self.failed_count += 1
-            logger.info(
-                "Task %d sample %d finished in %d steps; success=%s",
-                task_idx,
-                sample_idx,
-                step_count,
-                result.success,
+            print(
+                f"Task {task_idx} sample {sample_idx} finished with {step_count} steps and success={result.success}"
             )
             self._record_result_time(result)
 
-            logger.info(
-                "Aggregate totals - success: %d, failures: %d",
-                self.successful_count,
-                self.failed_count,
+            print(
+                f"Success: {self.successful_count}, Failures: {self.failed_count}"
             )
             return result
 
         except Exception as e:
-            logger.exception("Task %d sample %d raised an exception", task_idx, sample_idx)
+            print(traceback.format_exc())
             self.failed_count += 1
 
             if not task:
                 return None
 
-            logger.error("Task %d sample %d failed: %s", task_idx, sample_idx, e)
+            print(f"Task {task_idx} sample {sample_idx} failed: {e}")
 
             return None
         finally:
             if browser:
                 await browser.stop()
-                logger.debug(
-                    "Browser stopped for task %d sample %d", task_idx, sample_idx
-                )
 
     async def run(self, tasks=None) -> None:
         if not tasks:
             tasks = self.tasks
         total_runs = len(tasks) * self.sample_count
-        logger.info(
-            "Running %d tasks x %d samples = %d total runs (parallel=%d, max_steps=%d)",
-            len(tasks),
-            self.sample_count,
-            total_runs,
-            self.parallel,
-            self.max_steps,
+        print(
+            f"Running {len(tasks)} tasks x {self.sample_count} samples = {total_runs} total runs with parallelism {self.parallel} with max steps {self.max_steps}"
         )
 
         # Create semaphore for concurrency control
@@ -264,11 +219,8 @@ class RunHarness:
             ],
             return_exceptions=False,
         )
-        logger.info(
-            "Run complete - success: %d, failures: %d, total time: %.2fs",
-            self.successful_count,
-            self.failed_count,
-            self.total_task_time,
+        print(
+            f"Success: {self.successful_count}, Failures: {self.failed_count}, total benchmark time: {self.total_task_time:.2f}s"
         )
 
     def _record_result_time(self, result: Optional["ExperimentResult"]) -> None:
@@ -289,8 +241,3 @@ class RunHarness:
 
         if isinstance(time_taken, (int, float)):
             self.total_task_time += float(time_taken)
-            logger.debug(
-                "Added %.2fs to total benchmark time (now %.2fs)",
-                float(time_taken),
-                self.total_task_time,
-            )

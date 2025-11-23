@@ -4,22 +4,19 @@ import datetime
 import base64
 import io
 import json
-import logging
 import re
-import os
 from typing import List, Dict, Any, Tuple
 
 from patchright.async_api import Page
 import pytz
 from openai import AsyncOpenAI
 from PIL import Image
+import opik
+from opik import Attachment
 
 from arena import BaseAgent, AgentBrowser, AgentState
 from agi_agents.prompts import QWEN_AGENT
 from .tools import QwenToolExecutor
-
-
-logger = logging.getLogger(__name__)
 
 
 def _pil_to_data_url(image: Image.Image) -> str:
@@ -40,7 +37,7 @@ class QwenAgent(BaseAgent):
     def __init__(
         self,
         # model: str = "qwen3-vl-plus",
-        model: str = "qwen/qwen3-vl-235b-a22b-thinking",
++       model: str = "openai/gpt-4o",
         date_mode: str = "current",
         base_url: str | None = None,
         api_key: str | None = None,
@@ -49,25 +46,23 @@ class QwenAgent(BaseAgent):
         self.date_mode = date_mode
         assert date_mode in ["fixed", "current"]
 
-        api_key = api_key or os.getenv("OPENROUTER_API_KEY")
+        # Use environment variable if available, otherwise use hardcoded key
+        api_key = api_key or "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"
         base_url = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
         self.client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
         )
-        logger.debug(
-            "Initialized QwenAgent with model=%s, base_url=%s, date_mode=%s",
-            self.model,
-            base_url,
-            self.date_mode,
-        )
+
+        # Initialize Opik client for tracing
+        self.opik_client = opik.Opik(project_name="agi")
+        print(f"[OPIK] Initialized Opik client with project: agi")
 
         # Min/max pixels for Qwen vision model
         self.min_pixels = 64 * 32 * 32
         self.max_pixels = 9800 * 32 * 32
         # Number of recent images to include (including current)
         self.visual_history_length = 4
-        self.max_action_retries = 1
 
     async def _get_expanded_select(self, page: Page):
         """Return first <select> element-handle that is AX-expanded, else None."""
@@ -128,7 +123,6 @@ class QwenAgent(BaseAgent):
             "role": "system",
             "content": QWEN_AGENT.format(date=current_date),
         }
-        logger.debug("System message prepared with date context '%s'", current_date)
 
         # If no messages yet, create first user message with goal
         if not state.messages:
@@ -183,11 +177,6 @@ class QwenAgent(BaseAgent):
         # Remove messages that no longer have any content
         for idx in reversed(msgs_to_remove):
             del messages[idx]
-        logger.debug(
-            "Prepared %d messages with %d recent images",
-            len(messages),
-            len(keep_set),
-        )
 
         return messages
 
@@ -214,143 +203,32 @@ class QwenAgent(BaseAgent):
             except json.JSONDecodeError:
                 continue
             tool_calls.append((func_name, arguments))
-        if tool_calls:
-            logger.debug("Parsed tool calls: %s", tool_calls)
 
         return tool_calls
 
-    @staticmethod
-    def _extract_section(text: str, header: str) -> str:
-        """Extract a single section (e.g., Reasoning) from the assistant text."""
-        if not text:
-            return ""
-
-        pattern = re.compile(
-            rf"{header}:\s*(.*?)(?=\n[A-Za-z][A-Za-z0-9\s-]*:\s|$)",
-            re.DOTALL,
-        )
-        match = pattern.search(text)
-        if not match:
-            return ""
-
-        section_body = match.group(1)
-        merged = " ".join(line.strip() for line in section_body.splitlines())
-        return merged.strip()
-
-    async def _summarize_event_form(self, page: Page) -> str | None:
-        """Return a brief summary of key event form fields, if present."""
-
-        try:
-            summary = await page.evaluate(
-                """
-                () => {
-                    const dialog = document.querySelector('[role="dialog"]');
-                    if (!dialog) return null;
-
-                    const captureValue = (el) => {
-                        if (!el) return null;
-                        if (typeof el.value === 'string') return el.value.trim();
-                        if (el.isContentEditable) return (el.innerText || el.textContent || '').trim();
-                        return (el.textContent || '').trim();
-                    };
-
-                    const describeInput = (el) => {
-                        if (!el) return '';
-                        return (
-                            el.getAttribute('aria-label') ||
-                            el.getAttribute('name') ||
-                            el.getAttribute('placeholder') ||
-                            ''
-                        );
-                    };
-
-                const details = {
-                        title: null,
-                        date: null,
-                        start: null,
-                        end: null,
-                        location: null,
-                    };
-
-                    const assignIfMatch = (key, label, value) => {
-                        if (!value) return;
-                        const lower = (label || '').toLowerCase();
-                        if (!lower) return;
-                        const matches = {
-                            title: /title|summary|subject/,
-                            date: /date|day/,
-                            start: /start|from/,
-                            end: /end|to/,
-                            location: /location|place|where/,
-                        };
-                        if (matches[key].test(lower) && !details[key]) {
-                            details[key] = value;
-                        }
-                    };
-
-                    const fields = Array.from(dialog.querySelectorAll('input, textarea, [contenteditable="true"]'));
-                    for (const field of fields) {
-                        const label = describeInput(field);
-                        const value = captureValue(field);
-                        if (!value) continue;
-                        assignIfMatch('title', label, value);
-                        assignIfMatch('date', label, value);
-                        assignIfMatch('start', label, value);
-                        assignIfMatch('end', label, value);
-                        assignIfMatch('location', label, value);
-                    }
-
-                    if (!details.date) {
-                        const dateButton = dialog.querySelector('[data-testid*="date"], button[aria-label*="Date" i]');
-                        const text = captureValue(dateButton);
-                        if (text) details.date = text;
-                    }
-
-                    const meaningful = Object.values(details).some((val) => val && val.length);
-                    if (!meaningful) return null;
-                    return details;
-                }
-                """
-            )
-        except Exception:
-            return None
-
-        if not summary:
-            return None
-
-        parts = []
-        for key in ["title", "date", "start", "end", "location"]:
-            value = summary.get(key)
-            if value:
-                trimmed = value.strip()
-                if len(trimmed) > 80:
-                    trimmed = trimmed[:77] + "..."
-                parts.append(f"{key.capitalize()}={trimmed}")
-
-        return "; ".join(parts) if parts else None
-
     async def step(self, browser: AgentBrowser, state: AgentState) -> AgentState:
         """Execute one agent step using Qwen's native tool calling."""
+        print(f"\n{'='*60}")
+        print(f"[STEP] Starting new agent step")
+        print(f"[STEP] Model: {self.model}")
+        print(f"[STEP] Current state finished: {state.finished}")
+        print(f"{'='*60}\n")
+
         state.model = self.model
-        logger.debug(
-            "Starting agent step; current messages=%d, finished=%s",
-            len(state.messages),
-            state.finished,
-        )
 
         # Get viewport dimensions for coordinate scaling
+        print("[SCREENSHOT] Taking screenshot via CDP...")
         screenshot = await self._take_screenshot_cdp(browser)
+        print(f"[SCREENSHOT] Screenshot captured: {len(screenshot)} bytes")
         # Always derive dimensions from the screenshot so scaling matches real pixels
         image = Image.open(io.BytesIO(screenshot))
         original_width, original_height = image.width, image.height
-        logger.debug(
-            "Captured screenshot with dimensions %sx%s",
-            original_width,
-            original_height,
-        )
+        print(f"[IMAGE] Dimensions: {original_width}x{original_height}")
 
         # Ensure first turn includes task goal before image
         if not state.messages:
+            print(f"[MESSAGES] First turn - adding task goal")
+            print(f"[GOAL] {state.goal}")
             state.messages.append(
                 {"role": "user", "content": f"## Task Goal\n{state.goal}"}
             )
@@ -375,76 +253,120 @@ class QwenAgent(BaseAgent):
 
         # Build messages (will filter to the last 4 images)
         messages = await self.build_messages(state, screenshot)
+        print(f"[MESSAGES] Built {len(messages)} messages for API call")
+        print(f"[MESSAGES] Message history length: {len(state.messages)}")
 
-        # Call API with retry logic
+        # Call API with retry logic and Opik tracing
+        print("[API] Calling Qwen API...")
+        print("[OPIK] Creating trace for API call...")
+
+        # Create Opik trace
+        trace = self.opik_client.trace(
+            name=f"qwen_step_{state.step}",
+            input={"goal": state.goal, "step": state.step},
+            metadata={"model": self.model, "task_goal": state.goal}
+        )
+
+        # Save screenshot to a temporary file for Opik attachment
+        # Don't delete immediately - let Opik upload it first
+        screenshot_path = None
+        try:
+            import tempfile
+            screenshot_image = Image.open(io.BytesIO(screenshot))
+            # Use delete=False and don't manually delete - let OS clean up temp files
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.jpg', delete=False) as tmp_file:
+                screenshot_path = tmp_file.name
+                screenshot_image.save(tmp_file, format='JPEG', quality=80)
+            print(f"[OPIK] Saved screenshot to temp file: {screenshot_path}")
+        except Exception as e:
+            print(f"[OPIK] Failed to save screenshot: {e}")
+
         max_retries = 100
         response = None
+        last_error = None
         for attempt in range(max_retries + 1):
             try:
-                if attempt:
-                    logger.debug("Retrying completion attempt %d", attempt)
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     temperature=0.0,
                     max_tokens=1024,
                     messages=messages,
                 )
+
+                # Check if response has an error field (OpenRouter API errors)
+                if hasattr(response, 'error') and response.error:
+                    error_msg = response.error.get('message', 'Unknown error')
+                    error_code = response.error.get('code', 'N/A')
+                    last_error = f"API error {error_code}: {error_msg}"
+                    print(f"[API] Attempt {attempt + 1} failed with error: {last_error}")
+                    if attempt == max_retries:
+                        raise RuntimeError(f"Qwen API call failed after {max_retries} retries: {last_error}")
+                    continue
+
+                # Check if response has valid choices
+                if not response.choices or len(response.choices) == 0:
+                    last_error = "Empty choices in response"
+                    print(f"[API] Attempt {attempt + 1} failed: {last_error}")
+                    if attempt == max_retries:
+                        raise RuntimeError(f"Qwen API returned empty choices after {max_retries} retries")
+                    continue
+
+                print(f"[API] Success on attempt {attempt + 1}")
                 break
             except Exception as e:
+                last_error = str(e)
+                print(f"[API] Attempt {attempt + 1} failed with exception: {e}")
                 if attempt == max_retries:
-                    logger.error("Max retries reached calling Qwen API")
-                    raise e
-                logger.warning(
-                    "Completion attempt %d failed: %s; retrying",
-                    attempt,
-                    e,
-                )
-                await asyncio.sleep(1.0)
+                    raise RuntimeError(f"Qwen API call failed after {max_retries} retries: {e}") from e
+
         if response is None:
-            raise RuntimeError("Qwen API call failed without response")
+            raise RuntimeError(f"Qwen API call failed without response. Last error: {last_error}")
         message = response.choices[0].message
-        logger.debug("Received model response with %d choices", len(response.choices))
+
+        print(f"\n[RESPONSE] Assistant message:")
+        print(f"{message.content}")
+        print()
+
+        # Log LLM call as a span with screenshot attachment
+        try:
+            # Prepare attachments
+            attachments = []
+            if screenshot_path:
+                attachments.append(
+                    Attachment(
+                        data=screenshot_path,
+                        content_type="image/jpeg",
+                        name=f"screenshot_step_{state.step}.jpg"
+                    )
+                )
+
+            # Create LLM span with screenshot
+            trace.span(
+                name=f"llm_call_step_{state.step}",
+                type="llm",
+                input={"messages": str(messages)[:1000], "goal": state.goal},  # Truncate for readability
+                output={"content": message.content},
+                model=self.model,
+                metadata={
+                    "temperature": 0.0,
+                    "max_tokens": 1024,
+                    "step": state.step
+                },
+                attachments=attachments
+            )
+            print(f"[OPIK] Logged LLM call with screenshot to trace")
+        except Exception as e:
+            print(f"[OPIK] Failed to log LLM call: {e}")
 
         # Save assistant message to state (just content, no tool parsing)
-        assistant_content = message.content or ""
-        state.messages.append({"role": "assistant", "content": assistant_content})
-
-        missing_sections: List[str] = []
-
-        reasoning_text = self._extract_section(assistant_content, "Reasoning")
-        if reasoning_text:
-            logger.info("Model reasoning: %s", reasoning_text)
-        else:
-            logger.warning("Assistant response missing Reasoning section.")
-            missing_sections.append("Reasoning")
-
-        reflection_text = self._extract_section(assistant_content, "Reflection")
-        if reflection_text:
-            logger.info("Model reflection: %s", reflection_text)
-        else:
-            logger.warning("Assistant response missing Reflection section.")
-            missing_sections.append("Reflection")
-
-        self_check_plan = self._extract_section(assistant_content, "Self-Check Plan")
-        if self_check_plan:
-            logger.info("Self-check plan: %s", self_check_plan)
-        else:
-            logger.warning("Assistant response missing Self-Check Plan section.")
-            missing_sections.append("Self-Check Plan")
-
-        format_reminder_text = (
-            "Format reminder: Always respond with Reflection, Reasoning, Action, and "
-            "Self-Check Plan lines in that order. If you have nothing new, explicitly "
-            "say so (e.g., 'Reflection: No change since the last step.')."
-            if missing_sections
-            else ""
-        )
+        state.messages.append({"role": "assistant", "content": message.content or ""})
 
         # Parse and execute tool calls
         tool_calls = self._parse_tool_calls(message.content)
+        print(f"[TOOLS] Parsed {len(tool_calls)} tool calls")
 
         if tool_calls:
-            logger.debug("Executing %d tool call(s)", len(tool_calls))
+            print(f"[TOOLS] Executing {len(tool_calls)} tool calls...")
             tool_executor = QwenToolExecutor(
                 page=browser.page,
                 browser=browser,
@@ -455,60 +377,36 @@ class QwenAgent(BaseAgent):
 
             tool_results: List[str] = []
 
-            for tool_name, tool_args in tool_calls:
-                attempt_index = 0
-                retries_remaining = self.max_action_retries
-
-                while True:
-                    attempt_index += 1
-                    execution_failed = False
-                    try:
-                        result_text = await tool_executor.execute_tool(
-                            tool_name, tool_args
-                        )
-                        logger.debug("Tool '%s' executed with args %s", tool_name, tool_args)
-                        if tool_name == "finished":
-                            state.finished = True
-                    except Exception as e:
-                        result_text = f"Tool execution failed: {str(e)}"
-                        logger.exception("Tool '%s' execution failed", tool_name)
-                        execution_failed = True
-
-                    label = "Attempt" if attempt_index == 1 else f"Retry {attempt_index - 1}"
-                    observation = f"{tool_name} ({label}) -> {result_text}"
-                    logger.info(observation)
-                    tool_results.append(f"Observation: {observation}")
-
-                    await browser.page.wait_for_timeout(1500)
-
-                    if execution_failed and retries_remaining > 0 and not state.finished:
-                        retries_remaining -= 1
-                        continue
-                    break
-
-                if not state.finished:
-                    form_snapshot = await self._summarize_event_form(browser.page)
-                    previous_snapshot = getattr(state, "_last_form_snapshot", None)
-                    if form_snapshot and form_snapshot != previous_snapshot:
-                        tool_results.append(f"Form snapshot: {form_snapshot}")
-                    setattr(state, "_last_form_snapshot", form_snapshot)
-
-                if tool_name == "scroll":
-                    current_streak = getattr(state, "_consecutive_scroll_steps", 0) or 0
-                    streak = current_streak + 1
-                    setattr(state, "_consecutive_scroll_steps", streak)
-                else:
-                    setattr(state, "_consecutive_scroll_steps", 0)
-
+            for i, (tool_name, tool_args) in enumerate(tool_calls, 1):
+                print(f"[TOOL {i}] Executing: {tool_name}({tool_args})")
+                try:
+                    result_text = await tool_executor.execute_tool(tool_name, tool_args)
+                    print(f"[TOOL {i}] Result: {result_text}")
+                    if tool_name == "finished":
+                        state.finished = True
+                        print(f"[TOOL {i}] Task marked as finished!")
+                except Exception as e:
+                    result_text = f"Tool execution failed: {str(e)}"
+                    print(f"[TOOL {i}] Error: {e}")
+                tool_results.append(result_text)
                 if state.finished:
                     break
 
+            print("[WAIT] Waiting 2 seconds after tool execution...")
+            await browser.page.wait_for_timeout(2000)
+
             # Check for open dropdowns
+            print("[DROPDOWN] Checking for open dropdowns...")
             try:
                 dropdown_options = await asyncio.wait_for(
                     self._check_dropdown_options(browser.page), timeout=5.0
                 )
-            except Exception:
+                if dropdown_options:
+                    print(f"[DROPDOWN] Found options: {dropdown_options}")
+                else:
+                    print("[DROPDOWN] No open dropdowns found")
+            except Exception as e:
+                print(f"[DROPDOWN] Check failed: {e}")
                 dropdown_options = None
 
             # Build result message with dropdown info if found
@@ -522,22 +420,41 @@ Use the select_dropdown tool to select an option from the dropdown. Use the exac
 Available dropdown options: {dropdown_options}"""
                 result_parts.append(dropdown_message)
 
-            if missing_sections:
-                result_parts.append(format_reminder_text)
-
-            scroll_streak = getattr(state, "_consecutive_scroll_steps", 0) or 0
-            if scroll_streak >= 3:
-                result_parts.append(
-                    "Guidance: You've issued several scrolls in a row. Pause and switch strategies—toggle AM/PM, "
-                    "re-open the list, and click the desired slot instead of continuing to scroll. Typing into time "
-                    "or date fields is disabled in this environment."
-                )
-
             # Save result as simple user message
             state.messages.append({"role": "user", "content": "\n".join(result_parts)})
-            logger.debug("Appended tool results message to conversation")
+            print(f"[MESSAGES] Added tool results to conversation")
 
-        elif missing_sections and format_reminder_text:
-            state.messages.append({"role": "user", "content": format_reminder_text})
+            # Log tool results to Opik trace
+            try:
+                trace.update(
+                    output={
+                        "tool_calls": [{"name": tc[0], "args": tc[1]} for tc in tool_calls],
+                        "tool_results": tool_results,
+                        "finished": state.finished
+                    }
+                )
+                print(f"[OPIK] Updated trace with tool execution results")
+            except Exception as e:
+                print(f"[OPIK] Failed to update trace: {e}")
+        else:
+            # No tool calls - just log the response
+            try:
+                trace.update(
+                    output={
+                        "response": message.content,
+                        "finished": state.finished
+                    }
+                )
+                print(f"[OPIK] Updated trace with response")
+            except Exception as e:
+                print(f"[OPIK] Failed to update trace: {e}")
 
+        # End trace
+        try:
+            trace.end()
+            print(f"[OPIK] Trace ended successfully")
+        except Exception as e:
+            print(f"[OPIK] Failed to end trace: {e}")
+
+        print(f"\n[STEP] Step complete. State finished: {state.finished}\n")
         return state

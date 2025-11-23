@@ -1,0 +1,161 @@
+@startuml Main Execution Flow
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontSize 12
+skinparam activityFontSize 11
+
+title Hierarchical Action Batching - Main Execution Flow
+
+start
+
+:Start Metrics Tracking;
+
+:Capture Screenshot;
+note right
+  With retry logic
+  (max 3 attempts)
+end note
+
+partition "**PARALLEL ANALYSIS**" #LightBlue {
+    fork
+        :Vision Model\nAnalyze Page;
+        note right
+          - Identify elements
+          - Classify page type
+          - Extract coordinates
+        end note
+        :Return PageAnalysis;
+    fork again
+        :Orchestrator\nAnalyze Goal;
+        note right
+          - Understand task
+          - Create/revise plan
+          - Validate turn 1 constraints
+        end note
+        :Return ExecutionPlan;
+    end fork
+}
+
+:Store PageAnalysis\nStore ExecutionPlan;
+
+:Update Agent State\n(add analysis & plan to messages);
+
+if (Plan has actions?) then (yes)
+    
+    partition "**ACTION BATCH EXECUTION**" #LightGreen {
+        :Extract Action Batch\n(consecutive same-page actions);
+        note right
+          Batch stops at:
+          - Navigation action
+          - End of plan
+        end note
+        
+        :Validate Actions\n(check element compatibility);
+        
+        while (More actions in batch?) is (yes)
+            :Execute Action\n(click/type/select/scroll/wait/goto);
+            
+            if (Action succeeds?) then (yes)
+                :Increment actions_completed;
+                
+                if (Is navigation action?) then (yes)
+                    :Set navigation_occurred = true;
+                    :Break batch loop;
+                    stop
+                else (no)
+                    :Continue to next action;
+                endif
+                
+            else (no - ERROR)
+                :Create ExecutionError\n(classify error type);
+                :Break batch loop;
+                stop
+            endif
+        endwhile (no more actions)
+        
+        :Return ExecutionResult;
+    }
+    
+    if (Batch succeeded?) then (yes)
+        :Remove completed actions from plan;
+        :Reset consecutive_revisions = 0;
+        :Add success message to state;
+        
+        if (Navigation occurred?) then (yes)
+            :Capture new screenshot;
+            note right: **CONDITIONAL CAPTURE**\nOnly on navigation
+        else (no)
+            :Reuse existing screenshot;
+            note right: **PERFORMANCE WIN**\nNo unnecessary screenshots
+        endif
+        
+    else (no - FAILED)
+        :Capture error screenshot;
+        
+        if (Partial success?) then (yes)
+            :Remove successfully\ncompleted actions;
+            note right
+              Preserve progress
+              before failure
+            end note
+        endif
+        
+        :Add error info to state;
+        
+        if (Revision limit reached?) then (yes)
+            :Mark task as FAILED;
+            :Set state.finished = true;
+            :Stop metrics tracking;
+            stop
+            
+        else (no - CAN RETRY)
+            :Increment consecutive_revisions;
+            
+            partition "**ERROR RECOVERY**" #LightCoral {
+                :Vision Model\nRe-analyze Page;
+                note right
+                  Get updated page state
+                  after error
+                end note
+                
+                :Orchestrator\nRevise Plan;
+                note right
+                  Input: error details
+                  Output: revised plan
+                  Strategies:
+                  - Different elements
+                  - Changed sequence
+                  - Added steps
+                end note
+                
+                :Update current_plan;
+                :Add revision message;
+            }
+        endif
+    endif
+    
+else (no - EMPTY PLAN)
+    note right
+      Orchestrator will create
+      plan on next iteration
+    end note
+endif
+
+:Return Updated AgentState;
+
+if (Task finished?) then (yes)
+    :Stop metrics tracking;
+    :Generate MetricsSummary;
+    stop
+else (no)
+    :Continue to next step;
+    note right
+      Loop back to
+      screenshot capture
+    end note
+    stop
+endif
+
+@enduml

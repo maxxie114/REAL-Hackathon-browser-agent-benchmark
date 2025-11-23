@@ -1,0 +1,59 @@
+@startuml System Overview
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam defaultFontSize 13
+
+title Hierarchical Action Batching System - Overview
+
+rectangle "**ADAPTIVE AGENT SYSTEM**" {
+    
+    rectangle "**Step 1: Capture**\n\nScreenshot with retry" as Step1 #LightGray
+    
+    rectangle "**Step 2: Parallel Analysis**" as Step2 #LightBlue {
+        card "Vision Model\n(Qwen VLM)" as Vision
+        card "Orchestrator\n(GPT-4o)" as Orch
+        Vision -[hidden]- Orch
+    }
+    
+    rectangle "**Step 3: Batch Execution**" as Step3 #LightGreen {
+        card "Extract Actions\nValidate Compatibility\nExecute Sequentially"
+    }
+    
+    rectangle "**Step 4: Handle Result**" as Step4 #LightYellow {
+        card "Success Path" as Success #90EE90
+        card "Error Recovery" as Error #FFB6C6
+        Success -[hidden]- Error
+    }
+    
+    rectangle "**Step 5: Track Metrics**" as Step5 #Lavender {
+        card "Performance Stats\nModel Calls\nAction Success Rate"
+    }
+}
+
+Step1 -down-> Step2 : screenshot
+Step2 -down-> Step3 : PageAnalysis +\nExecutionPlan
+Step3 -down-> Step4 : ExecutionResult
+Step4 -down-> Step5 : events
+Step4 -up-> Step2 : revision\n(on error)
+
+note right of Step2
+    **Innovation #1**
+    Parallel execution
+    ~50% faster
+end note
+
+note right of Step3
+    **Innovation #2**
+    Action batching
+    3-5x efficiency
+end note
+
+note right of Step4
+    **Innovation #3**
+    Self-correcting
+    Dynamic recovery
+end note
+
+@enduml

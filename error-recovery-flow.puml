@@ -1,0 +1,87 @@
+@startuml Error Recovery Flow
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+
+title Error Recovery and Plan Revision Flow
+
+start
+
+:Execute Action Batch;
+
+if (Batch Execution Result?) then (Success)
+    :Remove completed actions from plan;
+    :Reset consecutive_revisions = 0;
+    :Add success message to state;
+    
+    if (Navigation occurred?) then (Yes)
+        :Capture new screenshot;
+        :Record screenshot metric;
+    else (No)
+        :Continue with existing screenshot;
+    endif
+    
+    :Return updated state;
+    stop
+    
+else (Failure)
+    :Capture error screenshot;
+    :Record screenshot metric;
+    
+    if (Partial success?) then (Yes)
+        :Remove successfully completed actions;
+        :Add partial success message;
+    else (No)
+        :Keep all actions in plan;
+    endif
+    
+    :Add error information to state;
+    
+    if (Revision limit reached?) then (Yes)
+        :Mark task as failed;
+        :Set state.finished = true;
+        :Add failure message;
+        stop
+    else (No)
+        :Increment consecutive_revisions;
+        
+        partition "Error Recovery Process" {
+            :Call Vision Model;
+            :analyze_page(screenshot, history);
+            :Record vision call metric;
+            :Get updated PageAnalysis;
+            
+            :Call Orchestrator;
+            :analyze_and_plan(goal, plan, analysis, **error_info**, ...);
+            :Record orchestrator call metric;
+            :Record plan revision metric;
+            
+            :Orchestrator analyzes error;
+            note right
+                Error information includes:
+                - Failed action details
+                - Error type classification
+                - Error message
+                - Actions completed before failure
+            end note
+            
+            :Orchestrator creates revised plan;
+            note right
+                Revision strategies:
+                - Use different elements
+                - Change action sequence
+                - Add intermediate steps
+                - Adjust parameters
+            end note
+            
+            :Update current_plan with revision;
+            :Add revision message to state;
+        }
+        
+        :Return updated state with revised plan;
+        stop
+    endif
+endif
+
+@enduml

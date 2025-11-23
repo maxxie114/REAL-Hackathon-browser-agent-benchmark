@@ -1,0 +1,117 @@
+@startuml Component Interactions
+
+!theme plain
+skinparam backgroundColor white
+skinparam shadowing false
+skinparam componentStyle rectangle
+
+title Component Interactions and Data Flow
+
+package "Adaptive Agent System" {
+    
+    [AdaptiveAgent] as Agent
+    [QwenVisionModel] as Vision
+    [GPT4Orchestrator] as Orchestrator
+    [ActionBatchExecutor] as Executor
+    [MetricsTracker] as Metrics
+    
+    database "Current State" {
+        [PageAnalysis] as CurrentAnalysis
+        [ExecutionPlan] as CurrentPlan
+    }
+    
+    Agent --> Vision : 1. Request page analysis
+    Vision --> Agent : PageAnalysis
+    
+    Agent --> Orchestrator : 2. Request plan\n(with PageAnalysis)
+    Orchestrator --> Agent : ExecutionPlan
+    
+    Agent --> CurrentAnalysis : 3. Store
+    Agent --> CurrentPlan : 3. Store
+    
+    Agent --> Executor : 4. Create batch\n(from ExecutionPlan)
+    Executor --> Agent : List[Action]
+    
+    Agent --> Executor : 5. Execute batch\n(with PageAnalysis)
+    Executor --> Agent : ExecutionResult
+    
+    Agent --> Metrics : 6. Record events
+    Metrics --> Agent : MetricsSummary
+    
+    note right of Vision
+        **Inputs:**
+        - Screenshot (bytes)
+        - Conversation history
+        
+        **Outputs:**
+        - PageAnalysis
+        - ElementLocation
+        - ElementLocationFailure
+    end note
+    
+    note right of Orchestrator
+        **Inputs:**
+        - Task goal
+        - Current plan
+        - PageAnalysis
+        - Error info (optional)
+        - Location failure (optional)
+        - Turn 1 flag
+        
+        **Outputs:**
+        - ExecutionPlan
+        - ToolCall
+        - InfoSeekingQuery
+    end note
+    
+    note right of Executor
+        **Inputs:**
+        - ExecutionPlan
+        - PageAnalysis
+        - AgentBrowser
+        
+        **Outputs:**
+        - ExecutionResult
+        - ExecutionError (on failure)
+    end note
+    
+    note bottom of Metrics
+        **Tracks:**
+        - Screenshot captures
+        - Vision model calls
+        - Orchestrator calls
+        - Plan revisions
+        - Action execution stats
+        - Timing information
+    end note
+}
+
+package "External Systems" {
+    [AgentBrowser] as Browser
+    [AgentState] as State
+}
+
+Agent --> Browser : Screenshot & Actions
+Browser --> Agent : Results
+
+Agent --> State : Update messages
+State --> Agent : Current state
+
+note right of Browser
+    **Provides:**
+    - Screenshot capture
+    - Page interaction
+    - Mouse/keyboard control
+    - Navigation
+end note
+
+note right of State
+    **Contains:**
+    - Task goal
+    - Current URL
+    - Step counter
+    - Message history
+    - Finished flag
+end note
+
+@enduml
