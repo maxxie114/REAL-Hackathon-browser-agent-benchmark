@@ -7,7 +7,7 @@ from arena import RunHarness
 async def main():
 
     agent = QwenAgent(
-        api_key="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"
+        api_key="your-openrouter-api-key"
     )
 
     print("[DEBUG] Creating RunHarness...")

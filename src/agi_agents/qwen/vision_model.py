@@ -58,7 +58,7 @@ class QwenVisionModel:
             self.client = client
         else:
             # Use environment variable if available, otherwise use provided key
-            api_key = api_key or "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"
+            api_key = api_key or "your-openrouter-api-key"
             base_url = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
             self.client = AsyncOpenAI(
                 base_url=base_url,
