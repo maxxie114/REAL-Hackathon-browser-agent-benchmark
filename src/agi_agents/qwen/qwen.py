@@ -494,7 +494,8 @@ class QwenAgent(BaseAgent):
                     setattr(state, "_last_form_snapshot", form_snapshot)
 
                 if tool_name == "scroll":
-                    streak = getattr(state, "_consecutive_scroll_steps", 0) + 1
+                    current_streak = getattr(state, "_consecutive_scroll_steps", 0) or 0
+                    streak = current_streak + 1
                     setattr(state, "_consecutive_scroll_steps", streak)
                 else:
                     setattr(state, "_consecutive_scroll_steps", 0)
@@ -524,7 +525,7 @@ Available dropdown options: {dropdown_options}"""
             if missing_sections:
                 result_parts.append(format_reminder_text)
 
-            scroll_streak = getattr(state, "_consecutive_scroll_steps", 0)
+            scroll_streak = getattr(state, "_consecutive_scroll_steps", 0) or 0
             if scroll_streak >= 3:
                 result_parts.append(
                     "Guidance: You've issued several scrolls in a row. Pause and switch strategies—toggle AM/PM, "
