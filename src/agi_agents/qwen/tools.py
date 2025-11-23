@@ -26,6 +26,8 @@ class QwenToolExecutor:
         self._logger = logging.getLogger(__name__)
         allowed_hosts = getattr(state, "allowed_hosts", set())
         self._allowed_hosts = {host.lower() for host in allowed_hosts}
+        self._last_scroll_direction: str | None = None
+        self._large_scroll_streak = 0
 
     def scale_coordinates(self, x: int, y: int) -> Tuple[int, int]:
         """Scale coordinates from 0-1000 range to actual viewport dimensions.
@@ -217,15 +219,45 @@ class QwenToolExecutor:
             if isinstance(speed, str):
                 speed_map = {
                     "slow": 200,
-                    "medium": 400,
+                    "medium": 350,
                     "default": default_pixels,
-                    "fast": 800,
-                    "faster": 1000,
-                    "turbo": 1400,
+                    "fast": 650,
+                    "faster": 900,
+                    "turbo": 1200,
                 }
                 pixels = speed_map.get(speed.lower(), default_pixels)
 
+        original_pixels = pixels
         pixels = max(50, min(2000, pixels))
+
+        # Throttle repeated large scrolls in the same direction so the agent refines more quickly.
+        if direction != self._last_scroll_direction:
+            self._last_scroll_direction = direction
+            self._large_scroll_streak = 0
+
+        if abs(pixels) >= 600:
+            if self._large_scroll_streak >= 1:
+                adjusted = 400 if pixels > 0 else -400
+                if adjusted != pixels:
+                    self._logger.info(
+                        "Reducing consecutive large scroll from %s to %s pixels",
+                        pixels,
+                        adjusted,
+                    )
+                pixels = adjusted
+                self._large_scroll_streak = 0
+            else:
+                self._large_scroll_streak += 1
+        else:
+            self._large_scroll_streak = 0
+
+        if pixels != original_pixels:
+            self._logger.info(
+                "Adjusted scroll distance from %s to %s pixels (direction=%s)",
+                original_pixels,
+                pixels,
+                direction,
+            )
 
         # Establish the target point for focusing/scrolling
         scroll_x: float | None = None

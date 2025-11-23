@@ -40,7 +40,7 @@ class QwenAgent(BaseAgent):
     def __init__(
         self,
         # model: str = "qwen3-vl-plus",
-        model: str = "qwen/qwen3-vl-235b-a22b-thinking",
+        model: str = "google/gemini-3-pro-image-preview",
         date_mode: str = "current",
         base_url: str | None = None,
         api_key: str | None = None,
@@ -67,6 +67,7 @@ class QwenAgent(BaseAgent):
         self.max_pixels = 9800 * 32 * 32
         # Number of recent images to include (including current)
         self.visual_history_length = 4
+        self.max_action_retries = 1
 
     async def _get_expanded_select(self, page: Page):
         """Return first <select> element-handle that is AX-expanded, else None."""
@@ -218,6 +219,24 @@ class QwenAgent(BaseAgent):
 
         return tool_calls
 
+    @staticmethod
+    def _extract_section(text: str, header: str) -> str:
+        """Extract a single section (e.g., Reasoning) from the assistant text."""
+        if not text:
+            return ""
+
+        pattern = re.compile(
+            rf"{header}:\s*(.*?)(?=\n[A-Za-z][A-Za-z0-9\s-]*:\s|$)",
+            re.DOTALL,
+        )
+        match = pattern.search(text)
+        if not match:
+            return ""
+
+        section_body = match.group(1)
+        merged = " ".join(line.strip() for line in section_body.splitlines())
+        return merged.strip()
+
     async def step(self, browser: AgentBrowser, state: AgentState) -> AgentState:
         """Execute one agent step using Qwen's native tool calling."""
         state.model = self.model
@@ -295,7 +314,39 @@ class QwenAgent(BaseAgent):
         logger.debug("Received model response with %d choices", len(response.choices))
 
         # Save assistant message to state (just content, no tool parsing)
-        state.messages.append({"role": "assistant", "content": message.content or ""})
+        assistant_content = message.content or ""
+        state.messages.append({"role": "assistant", "content": assistant_content})
+
+        missing_sections: List[str] = []
+
+        reasoning_text = self._extract_section(assistant_content, "Reasoning")
+        if reasoning_text:
+            logger.info("Model reasoning: %s", reasoning_text)
+        else:
+            logger.warning("Assistant response missing Reasoning section.")
+            missing_sections.append("Reasoning")
+
+        reflection_text = self._extract_section(assistant_content, "Reflection")
+        if reflection_text:
+            logger.info("Model reflection: %s", reflection_text)
+        else:
+            logger.warning("Assistant response missing Reflection section.")
+            missing_sections.append("Reflection")
+
+        self_check_plan = self._extract_section(assistant_content, "Self-Check Plan")
+        if self_check_plan:
+            logger.info("Self-check plan: %s", self_check_plan)
+        else:
+            logger.warning("Assistant response missing Self-Check Plan section.")
+            missing_sections.append("Self-Check Plan")
+
+        format_reminder_text = (
+            "Format reminder: Always respond with Reflection, Reasoning, Action, and "
+            "Self-Check Plan lines in that order. If you have nothing new, explicitly "
+            "say so (e.g., 'Reflection: No change since the last step.')."
+            if missing_sections
+            else ""
+        )
 
         # Parse and execute tool calls
         tool_calls = self._parse_tool_calls(message.content)
@@ -313,19 +364,44 @@ class QwenAgent(BaseAgent):
             tool_results: List[str] = []
 
             for tool_name, tool_args in tool_calls:
-                try:
-                    result_text = await tool_executor.execute_tool(tool_name, tool_args)
-                    logger.debug("Tool '%s' executed with args %s", tool_name, tool_args)
-                    if tool_name == "finished":
-                        state.finished = True
-                except Exception as e:
-                    result_text = f"Tool execution failed: {str(e)}"
-                    logger.exception("Tool '%s' execution failed", tool_name)
-                tool_results.append(result_text)
-                if state.finished:
+                attempt_index = 0
+                retries_remaining = self.max_action_retries
+
+                while True:
+                    attempt_index += 1
+                    execution_failed = False
+                    try:
+                        result_text = await tool_executor.execute_tool(
+                            tool_name, tool_args
+                        )
+                        logger.debug("Tool '%s' executed with args %s", tool_name, tool_args)
+                        if tool_name == "finished":
+                            state.finished = True
+                    except Exception as e:
+                        result_text = f"Tool execution failed: {str(e)}"
+                        logger.exception("Tool '%s' execution failed", tool_name)
+                        execution_failed = True
+
+                    label = "Attempt" if attempt_index == 1 else f"Retry {attempt_index - 1}"
+                    observation = f"{tool_name} ({label}) -> {result_text}"
+                    logger.info(observation)
+                    tool_results.append(f"Observation: {observation}")
+
+                    await browser.page.wait_for_timeout(1500)
+
+                    if execution_failed and retries_remaining > 0 and not state.finished:
+                        retries_remaining -= 1
+                        continue
                     break
 
-            await browser.page.wait_for_timeout(2000)
+                if tool_name == "scroll":
+                    streak = getattr(state, "_consecutive_scroll_steps", 0) + 1
+                    setattr(state, "_consecutive_scroll_steps", streak)
+                else:
+                    setattr(state, "_consecutive_scroll_steps", 0)
+
+                if state.finished:
+                    break
 
             # Check for open dropdowns
             try:
@@ -346,8 +422,22 @@ Use the select_dropdown tool to select an option from the dropdown. Use the exac
 Available dropdown options: {dropdown_options}"""
                 result_parts.append(dropdown_message)
 
+            if missing_sections:
+                result_parts.append(format_reminder_text)
+
+            scroll_streak = getattr(state, "_consecutive_scroll_steps", 0)
+            if scroll_streak >= 3:
+                result_parts.append(
+                    "Guidance: You've issued several scrolls in a row. Switch strategies—type the "
+                    "exact time (e.g., type({\"content\": \"2:00 PM\"})) or adjust the AM/PM "
+                    "toggle instead of continuing to scroll."
+                )
+
             # Save result as simple user message
             state.messages.append({"role": "user", "content": "\n".join(result_parts)})
             logger.debug("Appended tool results message to conversation")
+
+        elif missing_sections and format_reminder_text:
+            state.messages.append({"role": "user", "content": format_reminder_text})
 
         return state
