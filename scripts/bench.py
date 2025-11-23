@@ -1,28 +1,27 @@
 import asyncio
-import logging
 
 from agi_agents.qwen.qwen import QwenAgent
 from arena import RunHarness
-from arena.logging_config import configure_logging
 
 
 async def main():
-    configure_logging(level="INFO")
-    agent = QwenAgent()
 
+    agent = QwenAgent(
+        api_key="your-openrouter-api-key"
+    )
+
+    print("[DEBUG] Creating RunHarness...")
     harness = RunHarness(
         agent=agent,
         tasks=[
-            "src/benchmarks/hackathon/tasks/marrisuite-1.json"
+            "src/benchmarks/hackathon/tasks/gocalendar-9.json"
         ],
         parallel=1,
         sample_count=1,
         max_steps=60,
-        headless=False,
+        headless=True,
     )
-
     results = await harness.run()
-    logging.info("Run completed with results: %s", results)
 
 
 if __name__ == "__main__":

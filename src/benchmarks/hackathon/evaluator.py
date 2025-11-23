@@ -82,7 +82,9 @@ async def eval_llm_yesno(prompt: str) -> str:
     """
     try:
         from openai import AsyncOpenAI
-        client = AsyncOpenAI()
+        api_key = os.environ.get("OPENROUTER_API_KEY", os.environ.get("OPENAI_API_KEY", "your-openrouter-api-key"))
+        base_url = os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        client = AsyncOpenAI(api_key=api_key, base_url=base_url)
         resp = await client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": prompt}],

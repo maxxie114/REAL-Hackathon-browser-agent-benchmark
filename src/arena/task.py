@@ -1,16 +1,12 @@
 from typing import TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
-import logging
 
 if TYPE_CHECKING:
     from arena.browser import AgentBrowser
     from arena.state import AgentState
     from arena.result import ExperimentResult
     from arena.evaluation import BaseEvaluator
-
-
-logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,12 +39,6 @@ class Task:
             raise ValueError(f"Failed to setup evaluator for task: {task_spec}")
 
         evaluator, goal, url = result
-        logger.debug(
-            "Task created from spec %s with goal '%s' and url %s",
-            task_spec,
-            goal,
-            url,
-        )
         return cls(goal, url, evaluator)
 
     async def evaluate(self, state: "AgentState") -> "ExperimentResult":
@@ -62,7 +52,10 @@ class Task:
             return result
 
         except Exception as e:
-            logger.exception("Evaluation failed for goal '%s'", state.goal)
+            import traceback
+
+            traceback.print_exc()
+            print(f"Evaluation failed: {e}")
 
             from arena.result import ExperimentResult
 
