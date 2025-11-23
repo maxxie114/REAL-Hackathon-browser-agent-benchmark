@@ -40,7 +40,7 @@ class QwenAgent(BaseAgent):
     def __init__(
         self,
         # model: str = "qwen3-vl-plus",
-        model: str = "google/gemini-3-pro-image-preview",
+        model: str = "qwen/qwen3-vl-235b-a22b-thinking",
         date_mode: str = "current",
         base_url: str | None = None,
         api_key: str | None = None,
@@ -237,6 +237,98 @@ class QwenAgent(BaseAgent):
         merged = " ".join(line.strip() for line in section_body.splitlines())
         return merged.strip()
 
+    async def _summarize_event_form(self, page: Page) -> str | None:
+        """Return a brief summary of key event form fields, if present."""
+
+        try:
+            summary = await page.evaluate(
+                """
+                () => {
+                    const dialog = document.querySelector('[role="dialog"]');
+                    if (!dialog) return null;
+
+                    const captureValue = (el) => {
+                        if (!el) return null;
+                        if (typeof el.value === 'string') return el.value.trim();
+                        if (el.isContentEditable) return (el.innerText || el.textContent || '').trim();
+                        return (el.textContent || '').trim();
+                    };
+
+                    const describeInput = (el) => {
+                        if (!el) return '';
+                        return (
+                            el.getAttribute('aria-label') ||
+                            el.getAttribute('name') ||
+                            el.getAttribute('placeholder') ||
+                            ''
+                        );
+                    };
+
+                const details = {
+                        title: null,
+                        date: null,
+                        start: null,
+                        end: null,
+                        location: null,
+                    };
+
+                    const assignIfMatch = (key, label, value) => {
+                        if (!value) return;
+                        const lower = (label || '').toLowerCase();
+                        if (!lower) return;
+                        const matches = {
+                            title: /title|summary|subject/,
+                            date: /date|day/,
+                            start: /start|from/,
+                            end: /end|to/,
+                            location: /location|place|where/,
+                        };
+                        if (matches[key].test(lower) && !details[key]) {
+                            details[key] = value;
+                        }
+                    };
+
+                    const fields = Array.from(dialog.querySelectorAll('input, textarea, [contenteditable="true"]'));
+                    for (const field of fields) {
+                        const label = describeInput(field);
+                        const value = captureValue(field);
+                        if (!value) continue;
+                        assignIfMatch('title', label, value);
+                        assignIfMatch('date', label, value);
+                        assignIfMatch('start', label, value);
+                        assignIfMatch('end', label, value);
+                        assignIfMatch('location', label, value);
+                    }
+
+                    if (!details.date) {
+                        const dateButton = dialog.querySelector('[data-testid*="date"], button[aria-label*="Date" i]');
+                        const text = captureValue(dateButton);
+                        if (text) details.date = text;
+                    }
+
+                    const meaningful = Object.values(details).some((val) => val && val.length);
+                    if (!meaningful) return null;
+                    return details;
+                }
+                """
+            )
+        except Exception:
+            return None
+
+        if not summary:
+            return None
+
+        parts = []
+        for key in ["title", "date", "start", "end", "location"]:
+            value = summary.get(key)
+            if value:
+                trimmed = value.strip()
+                if len(trimmed) > 80:
+                    trimmed = trimmed[:77] + "..."
+                parts.append(f"{key.capitalize()}={trimmed}")
+
+        return "; ".join(parts) if parts else None
+
     async def step(self, browser: AgentBrowser, state: AgentState) -> AgentState:
         """Execute one agent step using Qwen's native tool calling."""
         state.model = self.model
@@ -394,6 +486,13 @@ class QwenAgent(BaseAgent):
                         continue
                     break
 
+                if not state.finished:
+                    form_snapshot = await self._summarize_event_form(browser.page)
+                    previous_snapshot = getattr(state, "_last_form_snapshot", None)
+                    if form_snapshot and form_snapshot != previous_snapshot:
+                        tool_results.append(f"Form snapshot: {form_snapshot}")
+                    setattr(state, "_last_form_snapshot", form_snapshot)
+
                 if tool_name == "scroll":
                     streak = getattr(state, "_consecutive_scroll_steps", 0) + 1
                     setattr(state, "_consecutive_scroll_steps", streak)
@@ -428,9 +527,9 @@ Available dropdown options: {dropdown_options}"""
             scroll_streak = getattr(state, "_consecutive_scroll_steps", 0)
             if scroll_streak >= 3:
                 result_parts.append(
-                    "Guidance: You've issued several scrolls in a row. Switch strategies—type the "
-                    "exact time (e.g., type({\"content\": \"2:00 PM\"})) or adjust the AM/PM "
-                    "toggle instead of continuing to scroll."
+                    "Guidance: You've issued several scrolls in a row. Pause and switch strategies—toggle AM/PM, "
+                    "re-open the list, and click the desired slot instead of continuing to scroll. Typing into time "
+                    "or date fields is disabled in this environment."
                 )
 
             # Save result as simple user message

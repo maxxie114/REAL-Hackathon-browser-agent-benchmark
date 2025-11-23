@@ -42,7 +42,8 @@ If you have no new information for a section, write a brief explicit statement (
 - For dropdowns that can't be seen in screenshots, you'll be told the available options - use select_dropdown with the exact value
 - Stay within the provided task environment. Do not use goto on external websites or search engines unless the instructions explicitly demand it—the simulator will block those requests. Prefer the on-page navigation controls you are given.
 - Run a quick scan for obvious on-screen controls first—click or use built-in search/filter boxes before resorting to long scrolls.
-- Keep scrolling brief and purposeful; when you must cover distance, use a single larger scroll (`"speed": "fast"`) and then immediately switch to smaller adjustments (`"speed": "medium"` or `"slow"`, or explicitly `"pixels": 150-400`). Do not chain large scrolls in the same direction; if you overshoot, correct with at most one smaller counter-scroll.
+- Keep scrolling brief and purposeful; when you must cover distance, fire one large scroll using a preset such as `"speed": "faster"` (no `"pixels"` override), then immediately switch to smaller adjustments (`"speed": "medium"`/`"slow"` or explicit `"pixels": 150-400`). Do not chain large scrolls in the same direction; if you overshoot, correct with at most one smaller counter-scroll.
+- When choosing a scroll `"speed"` preset, omit the `"pixels"` override unless you deliberately need a small adjustment—let the preset supply the stride for the first move, then use explicit pixels only for fine tuning.
 - Avoid press_and_hold unless you truly need to keep the mouse button down (e.g., to drag). For selecting or focusing elements, use click, double_click, or keyboard shortcuts instead.
 - Observation messages will summarize the outcome of your latest tool calls. Reference them directly in your Reflection before proposing the next action.
 - Mouse-based press_and_hold is disabled unless you set allow_mouse_hold=true in the tool call. Only request it when you must drag or resize something; otherwise rely on click or drag.
@@ -57,8 +58,11 @@ If you have no new information for a section, write a brief explicit statement (
 
 ### Calendar Tasks
 - The moment the event form opens, click the title field and enter the requested title so it is not forgotten.
-- If the time picker exposes AM/PM toggles, explicitly switch to PM before choosing hours for afternoon events. Prefer typing (e.g., type({{"content": "2:00 PM"}})) into time inputs if the picker makes it hard to land on the exact slot, then confirm the field reflects the requested time range.
-- For time pickers that require scrolling, start with exactly one purposeful large scroll (`"speed": "fast"`) to reach the general time, then immediately switch to `"speed": "medium"` or `"slow"` (or `"pixels": 150-250`) for fine tuning. If you overshoot, correct with a single small counter-scroll rather than another large pass.
-- Never issue more than two scroll actions in the same time dropdown before trying an alternative such as typing the time or toggling AM/PM.
+- If the time picker exposes AM/PM toggles, explicitly switch to PM before choosing hours for afternoon events. Adjust the time by scrolling within the picker and clicking the exact slot—typing into time inputs is disabled in this environment.
+- Never type directly into the date field—always use the mini calendar inside the dialog to change days.
+- For time pickers that require scrolling, start with a single large scroll (`"speed": "faster"`) to reach the general time; if the target is still far off, escalate once with `"speed": "turbo"`, then immediately switch to `"speed": "medium"`/`"slow"` or explicit `"pixels": 150-250` for fine tuning. If you overshoot, correct with a single small counter-scroll rather than another large pass.
+- Limit yourself to at most three scroll actions in the same time dropdown before switching tactics (e.g., toggle AM/PM, re-open the list, then click the desired slot).
+- Once the event dialog is open, keep all interactions inside the dialog. Do not click or scroll the background calendar to adjust details; use the form's mini-calendar, inputs, or dropdowns instead.
+- After entering or adjusting date/time fields, immediately confirm what the form now shows (e.g., read the Form snapshot in Observations) before moving on.
 - After the correct time slot is visible, confirm the selection with a click instead of continuing to scroll, and double-check the date before moving on.
 """

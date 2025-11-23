@@ -1,6 +1,6 @@
 """Tool execution for Qwen agent with text-based tool calling."""
 
-from typing import Dict, Any, Tuple
+from typing import Dict, Any, Tuple, List
 import logging
 from urllib.parse import urlparse
 
@@ -116,9 +116,48 @@ class QwenToolExecutor:
     async def _execute_click(self, tool_input: Dict[str, Any]) -> str:
         point = tool_input["point_2d"]
         x, y = self.scale_coordinates(point[0], point[1])
+
+        click_context = await self.page.evaluate(
+            """
+            ({ x, y }) => {
+                const dialog = document.querySelector('[role="dialog"]');
+                const element = document.elementFromPoint(x, y);
+                const describe = (el) => {
+                    if (!el) return null;
+                    const parts = [el.tagName];
+                    if (el.id) parts.push(`#${el.id}`);
+                    const className = (el.className || '').toString().trim();
+                    if (className) {
+                        const firstClass = className.split(/\s+/).slice(0, 2).join('.');
+                        parts.push(`.${firstClass}`);
+                    }
+                    const label = el.getAttribute('aria-label') || el.getAttribute('name') || el.getAttribute('data-testid');
+                    if (label) parts.push(`[@label='${label.slice(0, 40)}']`);
+                    return parts.join('');
+                };
+
+                return {
+                    dialogOpen: Boolean(dialog),
+                    insideDialog: dialog && element ? dialog.contains(element) : false,
+                    targetDescription: describe(element),
+                };
+            }
+            """,
+            {"x": x, "y": y},
+        )
+
         await self.page.mouse.click(x, y)
         await self._maybe_reveal_reply_controls()
-        return f"Clicked at ({point[0]}, {point[1]})"
+
+        extra_notes: List[str] = []
+        if click_context and click_context.get("dialogOpen") and not click_context.get("insideDialog"):
+            extra_notes.append(
+                " (Warning: click landed outside the open dialog; keep interactions inside the event form.)"
+            )
+        elif click_context and click_context.get("targetDescription"):
+            extra_notes.append(f" (target={click_context['targetDescription']})")
+
+        return f"Clicked at ({point[0]}, {point[1]})" + ("".join(extra_notes) if extra_notes else "")
 
     async def _execute_double_click(self, tool_input: Dict[str, Any]) -> str:
         point = tool_input["point_2d"]
@@ -187,8 +226,70 @@ class QwenToolExecutor:
 
     async def _execute_type(self, tool_input: Dict[str, Any]) -> str:
         content = tool_input["content"]
+        active_state_before = await self.page.evaluate(
+            """
+            () => {
+                const el = document.activeElement;
+                if (!el) return null;
+                const toText = (value) => (value == null ? null : String(value));
+                const info = {
+                    tag: el.tagName || null,
+                    role: el.getAttribute('role') || null,
+                    label: el.getAttribute('aria-label') || el.getAttribute('name') || el.getAttribute('placeholder') || null,
+                    value: null,
+                };
+                if (typeof el.value === 'string') {
+                    info.value = toText(el.value);
+                } else if (el.isContentEditable) {
+                    info.value = toText(el.innerText || el.textContent);
+                }
+                return info;
+            }
+            """
+        )
+
+        label_text = ""
+        if active_state_before:
+            label_text = (active_state_before.get("label") or "").lower()
+            tag_name = (active_state_before.get("tag") or "").lower()
+            if any(keyword in label_text for keyword in ("time", "date")) or tag_name == "time":
+                return (
+                    "Typing skipped: time/date fields must be adjusted via the on-screen picker. "
+                    "Use the dropdown controls, AM/PM toggle, and scroll/click selection instead."
+                )
+
         await self.page.keyboard.type(content, delay=50)
-        return f"Typed: {content[:50]}{'...' if len(content) > 50 else ''}"
+        active_state = await self.page.evaluate(
+            """
+            () => {
+                const el = document.activeElement;
+                if (!el) return null;
+                const toText = (value) => (value == null ? null : String(value));
+                const info = {
+                    tag: el.tagName || null,
+                    role: el.getAttribute('role') || null,
+                    label: el.getAttribute('aria-label') || el.getAttribute('name') || el.getAttribute('placeholder') || null,
+                    value: null,
+                };
+                if (typeof el.value === 'string') {
+                    info.value = toText(el.value);
+                } else if (el.isContentEditable) {
+                    info.value = toText(el.innerText || el.textContent);
+                }
+                return info;
+            }
+            """
+        )
+
+        snippet = content[:50] + ("..." if len(content) > 50 else "")
+        result = f"Typed: {snippet}"
+        if active_state and active_state.get("value") is not None:
+            label = active_state.get("label") or active_state.get("tag") or "field"
+            field_value = active_state["value"].strip()
+            if len(field_value) > 120:
+                field_value = field_value[:117] + "..."
+            result += f" | Active {label} now shows: '{field_value}'"
+        return result
 
     async def _execute_hotkey(self, tool_input: Dict[str, Any]) -> str:
         key = tool_input["key"]
@@ -221,9 +322,9 @@ class QwenToolExecutor:
                     "slow": 200,
                     "medium": 350,
                     "default": default_pixels,
-                    "fast": 650,
-                    "faster": 900,
-                    "turbo": 1200,
+                    "fast": 900,
+                    "faster": 1200,
+                    "turbo": 1600,
                 }
                 pixels = speed_map.get(speed.lower(), default_pixels)
 
