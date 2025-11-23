@@ -6,6 +6,12 @@ Minimal browser automation agent harness for running benchmarks with Agents.
 
 It's recommended to use [uv](https://docs.astral.sh/uv/), a very fast Python environment manager, to create and manage Python environments
 
+The environment variables OPENROUTER_API_KEY was giving error in the feature and yuvraj branch, so please replace your-openrouter-api-key with the openrouter key.
+
+The feature branch showcase the Orchestrator implementation, this is kind of broken for a lot of task.
+
+The yuvraj branch was debugging with Commet Opik for log tracking and fixing minor issues.
+
 ```bash
 uv sync
 ```
