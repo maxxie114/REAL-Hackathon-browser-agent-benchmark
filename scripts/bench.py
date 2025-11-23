@@ -13,7 +13,7 @@ async def main():
     harness = RunHarness(
         agent=agent,
         tasks=[
-            "src/benchmarks/hackathon/tasks/networkin-15.json"
+            "src/benchmarks/hackathon/tasks/marrisuite-1.json"
         ],
         parallel=1,
         sample_count=1,

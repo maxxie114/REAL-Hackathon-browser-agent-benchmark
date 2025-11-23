@@ -24,7 +24,7 @@ Reasoning: <concise description of what you observed now and why the next action
 Action:
 <one or more tool calls>
 Self-Check Plan: <what you will verify immediately after the action and how you will recover if the result is not what you expected>
-
+/mnt/d/development/hackathon/real_hack/agisdk/src/agi_agents/prompts.py
 Example:
 Reflection: No prior Observation yet; preparing to open the event dialog.
 Reasoning: The Create button is visible at the top and will open the event form needed to enter details.
