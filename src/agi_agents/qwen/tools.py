@@ -200,7 +200,32 @@ class QwenToolExecutor:
 
     async def _execute_scroll(self, tool_input: Dict[str, Any]) -> str:
         direction = tool_input["direction"]
-        pixels = tool_input.get("pixels", 300)
+
+        default_pixels = 300
+        pixels = default_pixels
+
+        raw_pixels = tool_input.get("pixels")
+        if isinstance(raw_pixels, (int, float)):
+            pixels = int(raw_pixels)
+        elif isinstance(raw_pixels, str):
+            try:
+                pixels = int(float(raw_pixels))
+            except ValueError:
+                pixels = default_pixels
+        else:
+            speed = tool_input.get("speed")
+            if isinstance(speed, str):
+                speed_map = {
+                    "slow": 200,
+                    "medium": 400,
+                    "default": default_pixels,
+                    "fast": 800,
+                    "faster": 1000,
+                    "turbo": 1400,
+                }
+                pixels = speed_map.get(speed.lower(), default_pixels)
+
+        pixels = max(50, min(2000, pixels))
 
         # Establish the target point for focusing/scrolling
         scroll_x: float | None = None
