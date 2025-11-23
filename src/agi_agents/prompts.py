@@ -29,4 +29,5 @@ click({{"point_2d": [920, 50]}})
 - You can clear input fields using hotkeys (e.g. Control + A then Backspace)
 - When using the finished action, make sure to report as much information about the task as possible.
 - For dropdowns that can't be seen in screenshots, you'll be told the available options - use select_dropdown with the exact value
+- Stay within the provided task environment. Do not use goto to open external websites or search engines unless explicitly instructed; interact only with the current site and its UI elements.
 """

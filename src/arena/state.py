@@ -1,11 +1,14 @@
 import sys
 import traceback
+import logging
 from typing import Optional, List, Dict, Any
 from dataclasses import dataclass, field
-from rich import print
 
 from arena.image import Base64Image
 from arena.errors import ArenaError
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -45,7 +48,11 @@ class AgentState:
             **vars(exception),  # Capture any custom attributes from agent's error class
         }
         self.error_count += 1
-        print("ArenaError encountered, registering for next step.", str(exception))
+        logger.warning(
+            "ArenaError encountered (count=%d): %s",
+            self.error_count,
+            str(exception),
+        )
 
     def __getattr__(self, name: str) -> None:
         return None

@@ -4,6 +4,7 @@ import datetime
 import base64
 import io
 import json
+import logging
 import re
 import os
 from typing import List, Dict, Any, Tuple
@@ -16,6 +17,9 @@ from PIL import Image
 from arena import BaseAgent, AgentBrowser, AgentState
 from agi_agents.prompts import QWEN_AGENT
 from .tools import QwenToolExecutor
+
+
+logger = logging.getLogger(__name__)
 
 
 def _pil_to_data_url(image: Image.Image) -> str:
@@ -45,11 +49,17 @@ class QwenAgent(BaseAgent):
         self.date_mode = date_mode
         assert date_mode in ["fixed", "current"]
 
-        api_key = api_key or os.getenv("OPENAI_API_KEY")
+        api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         base_url = (base_url or "https://openrouter.ai/api/v1").rstrip("/")
         self.client = AsyncOpenAI(
             base_url=base_url,
             api_key=api_key,
+        )
+        logger.debug(
+            "Initialized QwenAgent with model=%s, base_url=%s, date_mode=%s",
+            self.model,
+            base_url,
+            self.date_mode,
         )
 
         # Min/max pixels for Qwen vision model
@@ -117,6 +127,7 @@ class QwenAgent(BaseAgent):
             "role": "system",
             "content": QWEN_AGENT.format(date=current_date),
         }
+        logger.debug("System message prepared with date context '%s'", current_date)
 
         # If no messages yet, create first user message with goal
         if not state.messages:
@@ -171,6 +182,11 @@ class QwenAgent(BaseAgent):
         # Remove messages that no longer have any content
         for idx in reversed(msgs_to_remove):
             del messages[idx]
+        logger.debug(
+            "Prepared %d messages with %d recent images",
+            len(messages),
+            len(keep_set),
+        )
 
         return messages
 
@@ -197,18 +213,30 @@ class QwenAgent(BaseAgent):
             except json.JSONDecodeError:
                 continue
             tool_calls.append((func_name, arguments))
+        if tool_calls:
+            logger.debug("Parsed tool calls: %s", tool_calls)
 
         return tool_calls
 
     async def step(self, browser: AgentBrowser, state: AgentState) -> AgentState:
         """Execute one agent step using Qwen's native tool calling."""
         state.model = self.model
+        logger.debug(
+            "Starting agent step; current messages=%d, finished=%s",
+            len(state.messages),
+            state.finished,
+        )
 
         # Get viewport dimensions for coordinate scaling
         screenshot = await self._take_screenshot_cdp(browser)
         # Always derive dimensions from the screenshot so scaling matches real pixels
         image = Image.open(io.BytesIO(screenshot))
         original_width, original_height = image.width, image.height
+        logger.debug(
+            "Captured screenshot with dimensions %sx%s",
+            original_width,
+            original_height,
+        )
 
         # Ensure first turn includes task goal before image
         if not state.messages:
@@ -242,6 +270,8 @@ class QwenAgent(BaseAgent):
         response = None
         for attempt in range(max_retries + 1):
             try:
+                if attempt:
+                    logger.debug("Retrying completion attempt %d", attempt)
                 response = await self.client.chat.completions.create(
                     model=self.model,
                     temperature=0.0,
@@ -251,11 +281,18 @@ class QwenAgent(BaseAgent):
                 break
             except Exception as e:
                 if attempt == max_retries:
+                    logger.error("Max retries reached calling Qwen API")
                     raise e
+                logger.warning(
+                    "Completion attempt %d failed: %s; retrying",
+                    attempt,
+                    e,
+                )
                 await asyncio.sleep(1.0)
         if response is None:
             raise RuntimeError("Qwen API call failed without response")
         message = response.choices[0].message
+        logger.debug("Received model response with %d choices", len(response.choices))
 
         # Save assistant message to state (just content, no tool parsing)
         state.messages.append({"role": "assistant", "content": message.content or ""})
@@ -264,6 +301,7 @@ class QwenAgent(BaseAgent):
         tool_calls = self._parse_tool_calls(message.content)
 
         if tool_calls:
+            logger.debug("Executing %d tool call(s)", len(tool_calls))
             tool_executor = QwenToolExecutor(
                 page=browser.page,
                 browser=browser,
@@ -277,10 +315,12 @@ class QwenAgent(BaseAgent):
             for tool_name, tool_args in tool_calls:
                 try:
                     result_text = await tool_executor.execute_tool(tool_name, tool_args)
+                    logger.debug("Tool '%s' executed with args %s", tool_name, tool_args)
                     if tool_name == "finished":
                         state.finished = True
                 except Exception as e:
                     result_text = f"Tool execution failed: {str(e)}"
+                    logger.exception("Tool '%s' execution failed", tool_name)
                 tool_results.append(result_text)
                 if state.finished:
                     break
@@ -308,5 +348,6 @@ Available dropdown options: {dropdown_options}"""
 
             # Save result as simple user message
             state.messages.append({"role": "user", "content": "\n".join(result_parts)})
+            logger.debug("Appended tool results message to conversation")
 
         return state

@@ -7,10 +7,14 @@ to support the simplified harness.
 
 from typing import Optional
 import base64
+import logging
 from pathlib import Path
 from patchright.async_api import Browser, BrowserContext, Page, async_playwright
 
 from arena.image import Base64Image
+
+
+logger = logging.getLogger(__name__)
 
 
 class AgentBrowser:
@@ -61,7 +65,7 @@ class AgentBrowser:
                 await page.add_init_script(css_script)
                 await page.evaluate(css_script)
             except Exception:
-                pass
+                logger.debug("Dropdown proxy injection skipped for page", exc_info=True)
 
         with open(path_to_js, "r") as fd:
             js_script = fd.read()
@@ -107,12 +111,12 @@ class AgentBrowser:
 
                 asyncio.create_task(apply_proxy_scripts(page))
             except Exception:
-                pass
+                logger.debug("Failed to schedule dropdown proxy injection", exc_info=True)
 
         try:
             self._context.on("page", _on_new_page)
         except Exception:
-            pass
+            logger.debug("Context hook for dropdown proxy injection failed", exc_info=True)
 
     async def __aenter__(self) -> "AgentBrowser":
         await self.start()
@@ -123,6 +127,12 @@ class AgentBrowser:
 
     async def start(self) -> None:
         self._playwright = await async_playwright().start()
+        logger.debug(
+            "Playwright started (headless=%s, viewport=%sx%s)",
+            self.headless,
+            self.width,
+            self.height,
+        )
 
         base_context_kwargs = {
             "viewport": {"width": self.width, "height": self.height},
@@ -138,19 +148,25 @@ class AgentBrowser:
 
         if self.timeout:
             self._context.set_default_timeout(self.timeout)
+            logger.debug("Set default timeout to %s ms", self.timeout)
 
         await self._inject_dropdown_handling()
+        logger.debug("Dropdown handling scripts injected")
 
         if not self._context.pages:
             await self._context.new_page()
+            logger.debug("Initial page created in browser context")
 
     async def stop(self) -> None:
         if self._context:
             await self._context.close()
+            logger.debug("Browser context closed")
         if self._browser:
             await self._browser.close()
+            logger.debug("Browser closed")
         if self._playwright:
             await self._playwright.stop()
+            logger.debug("Playwright stopped")
 
     @property
     def browser(self) -> Browser:
@@ -167,5 +183,6 @@ class AgentBrowser:
     async def screenshot(self, quality: int = 60) -> Base64Image:
         """Take a screenshot and return as Base64Image"""
         screenshot_bytes = await self.page.screenshot(type="jpeg", quality=quality)
+        logger.debug("Captured screenshot at quality=%d", quality)
         base64_string = base64.b64encode(screenshot_bytes).decode("utf-8")
         return Base64Image(base64_string)
