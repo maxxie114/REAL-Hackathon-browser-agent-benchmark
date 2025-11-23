@@ -1,6 +1,7 @@
 from typing import TYPE_CHECKING, Optional, Tuple
 import asyncio
 import logging
+from urllib.parse import urlparse
 
 from arena.state import AgentState
 from arena.errors import AgentError
@@ -78,6 +79,10 @@ class TaskExecution:
             task_execution_id=self.task_execution_id,
         )
 
+        initial_host = urlparse(self.task.url).netloc.lower()
+        state.initial_url = self.task.url
+        state.allowed_hosts = {initial_host} if initial_host else set()
+
         state.messages.append(
             {
                 "role": "user",
@@ -91,7 +96,7 @@ class TaskExecution:
         step = 0  # Initialize step variable
         for step in range(self.max_steps):
             state.step = step
-            logger.debug("Starting step %d", step)
+            logger.info("Starting step %d", step)
 
             # Take screenshot and store in state
             screenshot = await self.browser.screenshot()
@@ -99,6 +104,8 @@ class TaskExecution:
             logger.debug("Screenshot captured and stored (total=%d)", len(state.images))
 
             # Execute agent step
+            previous_url = state.url
+
             try:
                 state = await asyncio.wait_for(
                     self.agent.step(self.browser, state),
@@ -106,7 +113,7 @@ class TaskExecution:
                 )
                 state.error = None  # clear previous error
                 state.error_count = 0  # reset error count on success
-                logger.debug("Step %d completed successfully", step)
+                logger.info("Step %d completed successfully", step)
             except AgentError as e:
                 state.register_error(e)
                 if state.error_count >= MAX_STEP_ERRORS:
@@ -143,7 +150,8 @@ class TaskExecution:
                 raise RuntimeError(f"Step {step} failed {MAX_STEP_ERRORS} times")
 
             state.url = self.browser.page.url
-            logger.debug("Step %d updated URL to %s", step, state.url)
+            if state.url != previous_url:
+                logger.info("Step %d navigated to %s", step, state.url)
             await asyncio.sleep(0.5)
             if state.finished:
                 logger.info("Task signaled finished after step %d", step)
@@ -152,10 +160,6 @@ class TaskExecution:
         # Evaluate task
         logger.info("Evaluating task '%s'", self.task.goal)
         result = await self.task.evaluate(state)
-        logger.debug(
-            "Evaluation complete for goal '%s' with success=%s",
-            self.task.goal,
-            getattr(result, "success", None),
-        )
+        logger.info("Evaluation result: %s", result)
 
         return state, result

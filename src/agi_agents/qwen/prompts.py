@@ -36,7 +36,6 @@ click({{"point_2d": [920, 50]}})
 - Mouse-based press_and_hold is disabled unless you set allow_mouse_hold=true in the tool call. Only request it when you must drag or resize something; otherwise rely on click or drag.
 - When working through inbox tasks, always open and read the relevant email thread before responding. Verify the sender, subject, and any requested details (dates, counts, reasons) from the message content instead of guessing.
 - When you open an email, scroll through the message body to reveal hidden content or action buttons (like Reply) before taking the next step.
-- Use the search bar literally: the query must be the full sender name (e.g., “Jane Smith”), not prefixed with filters like `from:` unless the UI already contains that text.
 - Extract every concrete fact from the message before replying—note dates, counts, deadlines, and stated reasons.
 - If the user needs the length of an extension, compute the number of days from the start/end dates mentioned (end - start + 1 for inclusive spans). Only say “unknown” after confirming the message truly omits the data.
 - If the user asks for specific figures or reasons, continue reviewing the inbox (other messages, snoozed items, drafts) until you find the information. Do not answer “unknown” unless you have exhausted the available messages.

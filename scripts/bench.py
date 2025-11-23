@@ -7,14 +7,13 @@ from arena.logging_config import configure_logging
 
 
 async def main():
-    configure_logging(level="DEBUG")
-    logging.debug("Logging configured for bench script")
+    configure_logging(level="INFO")
     agent = QwenAgent()
 
     harness = RunHarness(
         agent=agent,
         tasks=[
-            "src/benchmarks/hackathon/tasks/gomail-5.json"
+            "src/benchmarks/hackathon/tasks/gocalendar-2.json"
         ],
         parallel=1,
         sample_count=1,
@@ -23,7 +22,7 @@ async def main():
     )
 
     results = await harness.run()
-    logging.debug("Run completed with results: %s", results)
+    logging.info("Run completed with results: %s", results)
 
 
 if __name__ == "__main__":
